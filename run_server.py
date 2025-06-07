@@ -6,7 +6,7 @@ from pathlib import Path
 
 def main():
     # Set environment variables
-    os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
+    os.environ["CUDA_VISIBLE_DEVICES"] = "GPU-820524a4-c0c0-6fd9-abfd-f4b3395b86bc,GPU-8cfb51d3-4b3f-3832-dd90-b1c6b5922231"
     
     # Check if model files exist
     config_path = "configs/viton512.yaml"

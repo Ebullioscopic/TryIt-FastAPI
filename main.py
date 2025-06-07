@@ -165,7 +165,7 @@ def get_tensor(normalize=True, toTensor=True):
 def preprocess_image_for_model(image_bytes: bytes, target_size: tuple = (512, 384)) -> torch.Tensor:
     """Preprocess uploaded image for model input"""
     image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    image = image.resize(target_size)
+    image = image.resize((target_size[1], target_size[0]))
     
     transform = get_tensor(normalize=True, toTensor=True)
     return transform(image).unsqueeze(0)
@@ -173,7 +173,7 @@ def preprocess_image_for_model(image_bytes: bytes, target_size: tuple = (512, 38
 def preprocess_mask(mask_bytes: bytes, target_size: tuple = (512, 384)) -> torch.Tensor:
     """Preprocess mask image"""
     mask = Image.open(io.BytesIO(mask_bytes)).convert("L")
-    mask = mask.resize(target_size)
+    mask = mask.resize((target_size[1], target_size[0]))
     
     transform = transforms.Compose([transforms.ToTensor()])
     return transform(mask).unsqueeze(0)
@@ -308,6 +308,14 @@ async def inference(
         garment_tensor = garment_tensor.to(device)
         mask_tensor = mask_tensor.to(device)
         
+        if warp_feat:
+            warp_feat_bytes = await warp_feat.read()
+            feat_tensor = preprocess_image_for_model(warp_feat_bytes, target_size).to(device)
+            temp_files.append(save_temp_file(warp_feat_bytes, ".jpg"))
+        else:
+            # Use person image as warped feature if not provided
+            feat_tensor = person_tensor.clone()
+            
         # Handle optional inputs
         skeleton_cf_tensor = None
         skeleton_cb_tensor = None
@@ -378,6 +386,14 @@ async def inference(
                         test_model_kwargs['inpaint_mask'])
                     test_model_kwargs['inpaint_mask'] = resized_mask
                     print(f"🔍 DEBUG: resized_mask shape: {resized_mask.shape}")
+                    
+                    warp_feat_encoded = model.encode_first_stage(feat_tensor)
+                    warp_feat_encoded = model.get_first_stage_encoding(warp_feat_encoded).detach()
+                    
+                    # Create start code from warped features - Fix: Follow test.py pattern
+                    ts = torch.full((1,), 999, device=device, dtype=torch.long)
+                    start_code = model.q_sample(warp_feat_encoded, ts)
+                    print(f"🔍 DEBUG: start_code shape: {start_code.shape}")
                     # Prepare conditioning
                     c = model.get_learned_conditioning(garment_tensor.to(torch.float16))
                     print(f"🔍 DEBUG: conditioning before proj_out shape: {c.shape}")
@@ -416,10 +432,13 @@ async def inference(
                         ehs_text = torch.zeros((c.shape[0], 1, 768)).to(device)
                         
                         # Prepare input for controlnet
+                        # x_noisy = torch.cat(
+                        #     (start_code if start_code is not None else torch.randn([n_samples, 4, height // 8, width // 8], device=device),
+                        #      test_model_kwargs['inpaint_image'], 
+                        #      test_model_kwargs['inpaint_mask']), dim=1)
+                        
                         x_noisy = torch.cat(
-                            (start_code if start_code is not None else torch.randn([n_samples, 4, height // 8, width // 8], device=device),
-                             test_model_kwargs['inpaint_image'], 
-                             test_model_kwargs['inpaint_mask']), dim=1)
+                            (start_code, test_model_kwargs['inpaint_image'], test_model_kwargs['inpaint_mask']), dim=1)
                         
                         ts = torch.full((n_samples,), 999, device=device, dtype=torch.long)
                         
